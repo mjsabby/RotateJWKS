@@ -9,14 +9,25 @@ namespace RotateJWKS
     {
         public static void Main(string[] args)
         {
-            if (args.Length != 2)
+            const string usage = "Usage: RotateJWKS /encryptedDisk/keysFolderPath /toServePublicly/jwks.json RSAorEC";
+
+            if (args.Length != 3)
             {
-                Environment.FailFast("Usage: RotateJWKS /encryptedDisk/keysFolderPath /toServePublicly/jwks.json");
+                Environment.FailFast(usage);
                 return;
             }
 
             var privateKeysPath = args[0];
             var publicJwksPath = args[1];
+            var keyType = args[2];
+
+            if (!string.Equals(keyType, "RSA", StringComparison.OrdinalIgnoreCase) && !string.Equals(keyType, "EC", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.FailFast(usage);
+                return;
+            }
+
+            bool isRSA = string.Equals(keyType, "RSA", StringComparison.OrdinalIgnoreCase);
 
             var currentlyPassivePemPath = Path.Combine(privateKeysPath, "currentlyPassive.pem"); // used at the end of this program
             var currentlyActivePemPath = Path.Combine(privateKeysPath, "currentlyActive.pem");
@@ -24,14 +35,27 @@ namespace RotateJWKS
             // first run
             if (!File.Exists(currentlyActivePemPath))
             {
-                File.WriteAllText(currentlyActivePemPath, GeneratePEM());
+                File.WriteAllText(currentlyActivePemPath, isRSA ? GenerateRSAPEM() : GenerateECPEM());
             }
 
             var currentlyActivePem = File.ReadAllText(currentlyActivePemPath);
-            string currentlyActiveJwk = PEMToJWK(currentlyActivePem);
 
-            string newPem = GeneratePEM();
-            string newJwk = PEMToJWK(newPem);
+            string currentlyActiveJwk;
+            string newPem;
+            string newJwk;
+
+            if (isRSA)
+            {
+                currentlyActiveJwk = RSAPEMToJWK(currentlyActivePem);
+                newPem = GenerateRSAPEM();
+                newJwk = RSAPEMToJWK(newPem);
+            }
+            else
+            {
+                currentlyActiveJwk = ECPEMToJWK(currentlyActivePem);
+                newPem = GenerateECPEM();
+                newJwk = ECPEMToJWK(newPem);
+            }
 
             var outputJwks = $"{{\n  \"keys\": [\n{newJwk},\n{currentlyActiveJwk}\n  ]\n}}"; // new key first, then the currently active key that is becoming passive
 
@@ -41,13 +65,19 @@ namespace RotateJWKS
             File.WriteAllText(publicJwksPath, outputJwks);
         }
 
-        private static string GeneratePEM()
+        private static string GenerateRSAPEM()
         {
             using var rsa = RSA.Create(2048);
             return $"-----BEGIN PRIVATE KEY-----\n{Convert.ToBase64String(rsa.ExportPkcs8PrivateKey())}\n-----END PRIVATE KEY-----";
         }
 
-        private static string PEMToJWK(string pem)
+        private static string GenerateECPEM()
+        {
+            using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            return $"-----BEGIN PRIVATE KEY-----\n{Convert.ToBase64String(ecdsa.ExportPkcs8PrivateKey())}\n-----END PRIVATE KEY-----";
+        }
+
+        private static string RSAPEMToJWK(string pem)
         {
             using var rsa = RSA.Create();
             rsa.ImportFromPem(pem);
@@ -58,8 +88,21 @@ namespace RotateJWKS
             string k = Base64UrlEncode(SHA256.HashData(Encoding.UTF8.GetBytes($$"""{"e":"{{e}}","kty":"RSA","n":"{{n}}"}""")));
 
             return $"    {{\n      \"alg\":\"RS256\",\n      \"use\":\"sig\",\n      \"kty\":\"RSA\",\n      \"kid\":\"{k}\",\n      \"e\":\"{e}\",\n      \"n\":\"{n}\"\n    }}";
-
-            static string Base64UrlEncode(byte[] input) => Convert.ToBase64String(input).TrimEnd('=').Replace('+', '-').Replace('/', '_');
         }
+
+        private static string ECPEMToJWK(string pem)
+        {
+            using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            ecdsa.ImportFromPem(pem);
+            var ecdsaParameters = ecdsa.ExportParameters(false);
+
+            string x = Base64UrlEncode(ecdsaParameters.Q.X!);
+            string y = Base64UrlEncode(ecdsaParameters.Q.Y!);
+            string k = Base64UrlEncode(SHA256.HashData(Encoding.UTF8.GetBytes($$"""{"crv":"P-256","kty":"EC","x":"{{x}}","y":"{{y}}"}""")));
+
+            return $"    {{\n      \"alg\":\"ES256\",\n      \"use\":\"sig\",\n      \"kty\":\"EC\",\n      \"kid\":\"{k}\",\n      \"crv\":\"P-256\",\n      \"x\":\"{x}\",\n      \"y\":\"{y}\"\n    }}";
+        }
+
+        private static string Base64UrlEncode(byte[] input) => Convert.ToBase64String(input).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 }
