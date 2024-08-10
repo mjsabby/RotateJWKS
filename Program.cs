@@ -3,6 +3,7 @@ namespace RotateJWKS
     using System;
     using System.IO;
     using System.Security.Cryptography;
+    using System.Text;
 
     internal static class Program
     {
@@ -52,9 +53,10 @@ namespace RotateJWKS
             rsa.ImportFromPem(pem);
             var rsaParameters = rsa.ExportParameters(false);
 
-            string k = Base64UrlEncode(SHA256.HashData(rsaParameters.Modulus!));
             string n = Base64UrlEncode(rsaParameters.Modulus!);
             string e = Base64UrlEncode(rsaParameters.Exponent!);
+            string k = Base64UrlEncode(SHA256.HashData(Encoding.UTF8.GetBytes($$"""{"e":"{{e}}","kty":"RSA","n":"{{n}}"}""")));
+
             return $"    {{\n      \"alg\":\"RS256\",\n      \"use\":\"sig\",\n      \"kty\":\"RSA\",\n      \"kid\":\"{k}\",\n      \"e\":\"{e}\",\n      \"n\":\"{n}\"\n    }}";
 
             static string Base64UrlEncode(byte[] input) => Convert.ToBase64String(input).TrimEnd('=').Replace('+', '-').Replace('/', '_');
